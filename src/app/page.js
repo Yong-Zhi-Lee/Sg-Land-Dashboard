@@ -299,7 +299,13 @@ async function fetchFromAPI() {
 
 // ─── UI HELPERS ───────────────────────────────────────────────────────────────
 const fmt    = n => !n ? '—' : n >= 1e9 ? `$${(n/1e9).toFixed(2)}B` : `$${(n/1e6).toFixed(1)}M`
-const fmtPsm = n => n ? `$${Math.round(n).toLocaleString()}/psm` : '—'
+const SQM_TO_SQFT = 10.7639
+// Price per sqm of GFA, computed from price/gfa if psmGfa wasn't already supplied
+// (some EC fallback rows have psmGfa hardcoded to 0 even though gfa is known).
+const gfaPsm = d => d.psmGfa || (d.gfa ? d.price / d.gfa : 0)
+// Formats a $/sqm-GFA figure as the PSF PPR figure (price per sq ft per plot ratio)
+// that Singapore developers and analysts conventionally quote land bids in.
+const fmtPsf = psm => psm ? `$${Math.round(psm / SQM_TO_SQFT).toLocaleString()} psf ppr` : '—'
 const s      = (obj) => Object.entries(obj).map(([k,v]) => `${k}:${v}`).join(';') // inline style helper - not used but kept
 
 const Badge = ({ type, children }) => {
@@ -360,6 +366,19 @@ const Td = ({ children, mono, bold, dim, red, green, style: sx = {} }) => (
     fontFamily: mono ? 'DM Mono,monospace' : 'inherit',
     fontWeight: bold ? 600 : 'inherit',
     color: red ? C.accent : green ? C.green : dim ? C.muted : 'inherit', ...sx}}>{children}</td>
+)
+
+// Site name plus its eventual marketing/project name underneath, for easier
+// consumer reference. data.gov.sg's GLS dataset doesn't include project names
+// (these are only assigned once a developer launches sales), so this shows
+// "Not yet launched" unless a projectName has been supplied on the record.
+const LocCell = ({ name, project, maxWidth }) => (
+  <Td bold sx={{ fontSize: 11, ...(maxWidth ? { maxWidth } : {}) }}>
+    <div>{name}</div>
+    <div style={{ fontSize: 9, fontWeight: 400, color: C.muted, marginTop: 2 }}>
+      {project || 'Not yet launched'}
+    </div>
+  </Td>
 )
 
 const BarRow = ({ label, value, max, color, suffix }) => (
@@ -450,8 +469,10 @@ export default function Dashboard() {
   const ecByArea = {}, privByArea = {}
   ecData.forEach(d => {
     if (!d.planningArea) return
-    if (!ecByArea[d.planningArea]) ecByArea[d.planningArea] = []
-    if (d.price) ecByArea[d.planningArea].push(d.price)
+    if (!ecByArea[d.planningArea]) ecByArea[d.planningArea] = { bids:[], psms:[] }
+    if (d.price) ecByArea[d.planningArea].bids.push(d.price)
+    const psm = gfaPsm(d)
+    if (psm) ecByArea[d.planningArea].psms.push(psm)
   })
   privData.forEach(d => {
     if (!d.planningArea) return
@@ -460,7 +481,10 @@ export default function Dashboard() {
     if (d.psmGfa) privByArea[d.planningArea].psms.push(d.psmGfa)
   })
   const ecAreaList = Object.entries(ecByArea)
-    .map(([n,v])=>({name:n, avg:v.reduce((a,b)=>a+b,0)/v.length, count:v.length}))
+    .map(([n,v])=>({name:n,
+      avg: v.bids.length ? v.bids.reduce((a,b)=>a+b,0)/v.bids.length : 0,
+      avgPsm: v.psms.length ? v.psms.reduce((a,b)=>a+b,0)/v.psms.length : 0,
+      count: v.bids.length}))
     .filter(t=>t.avg>0).sort((a,b)=>b.avg-a.avg)
   const privAreaList = Object.entries(privByArea)
     .map(([n,v])=>({name:n,
@@ -473,8 +497,8 @@ export default function Dashboard() {
 
   // Combined table
   const combined = [
-    ...ecData.map(d=>({type:'EC',   name:d.location, area:d.planningArea, date:d.awardDate, developer:d.tenderer, price:d.price, psm:d.psmGfa||Math.round(d.price/(d.gfa||1)), bids:d.bids})),
-    ...privData.map(d=>({type:'Private', name:d.location, area:d.planningArea, date:d.awardDate, developer:d.tenderer, price:d.price, psm:d.psmGfa, bids:d.bids})),
+    ...ecData.map(d=>({type:'EC',   name:d.location, project:d.projectName, area:d.planningArea, date:d.awardDate, developer:d.tenderer, price:d.price, psm:gfaPsm(d), bids:d.bids})),
+    ...privData.map(d=>({type:'Private', name:d.location, project:d.projectName, area:d.planningArea, date:d.awardDate, developer:d.tenderer, price:d.price, psm:gfaPsm(d), bids:d.bids})),
   ]
   const areas = [...new Set(combined.map(d=>d.area).filter(Boolean))].sort()
   const years = [...new Set(combined.map(d=>d.date?.slice(0,4)).filter(Boolean))].sort().reverse()
@@ -488,9 +512,9 @@ export default function Dashboard() {
   // PSM comparison data
   const psmRows = (() => {
     const ecPsm = {}, prPsm = {}
-    ecData.filter(d=>d.awardDate>='2020-01-01'&&d.siteArea>0&&d.price>0).forEach(d=>{
+    ecData.filter(d=>d.awardDate>='2020-01-01'&&gfaPsm(d)>0).forEach(d=>{
       if(!ecPsm[d.planningArea]) ecPsm[d.planningArea]=[]
-      ecPsm[d.planningArea].push(d.price/d.siteArea)
+      ecPsm[d.planningArea].push(gfaPsm(d))
     })
     privData.filter(d=>d.awardDate>='2020-01-01'&&d.psmGfa>0).forEach(d=>{
       if(!prPsm[d.planningArea]) prPsm[d.planningArea]=[]
@@ -608,31 +632,32 @@ export default function Dashboard() {
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:18, marginBottom:20}}>
             <Panel title="🟠 EC — Recent Awards" badge={ecRecent.length} meta="2025–2026">
               <table>
-                <thead><tr><Th>Location</Th><Th>Area</Th><Th>Developer</Th><Th>Bid</Th></tr></thead>
+                <thead><tr><Th>Location</Th><Th>Area</Th><Th>Developer</Th><Th>Bid</Th><Th>$psf ppr</Th></tr></thead>
                 <tbody>
                   {ecRecent.slice(0,10).map((d,i)=>(
                     <tr key={i} style={{background:'#fffbf0'}}>
-                      <Td bold sx={{fontSize:11, maxWidth:160}}>{d.location}</Td>
+                      <LocCell name={d.location} project={d.projectName} maxWidth={160}/>
                       <Td sx={{fontSize:11}}>{d.planningArea}</Td>
                       <Td sx={{fontSize:10, color:C.muted}}>{d.tenderer?.slice(0,35)}</Td>
                       <Td mono>{fmt(d.price)}</Td>
+                      <Td mono green={gfaPsm(d)>15000}>{fmtPsf(gfaPsm(d))}</Td>
                     </tr>
                   ))}
-                  {ecRecent.length===0 && <tr><td colSpan={4} style={{padding:20, textAlign:'center', color:C.muted}}>Loading…</td></tr>}
+                  {ecRecent.length===0 && <tr><td colSpan={5} style={{padding:20, textAlign:'center', color:C.muted}}>Loading…</td></tr>}
                 </tbody>
               </table>
             </Panel>
 
             <Panel title="🔵 Private Res — Recent Awards" badge={privRecent.length} meta="2025–2026">
               <table>
-                <thead><tr><Th>Location</Th><Th>Area</Th><Th>Bid</Th><Th>$/psm GFA</Th></tr></thead>
+                <thead><tr><Th>Location</Th><Th>Area</Th><Th>Bid</Th><Th>$psf ppr</Th></tr></thead>
                 <tbody>
                   {privRecent.slice(0,10).map((d,i)=>(
                     <tr key={i}>
-                      <Td bold sx={{fontSize:11, maxWidth:160}}>{d.location}</Td>
+                      <LocCell name={d.location} project={d.projectName} maxWidth={160}/>
                       <Td sx={{fontSize:11}}>{d.planningArea}</Td>
                       <Td mono>{fmt(d.price)}</Td>
-                      <Td mono green={d.psmGfa>15000}>{fmtPsm(d.psmGfa)}</Td>
+                      <Td mono green={gfaPsm(d)>15000}>{fmtPsf(gfaPsm(d))}</Td>
                     </tr>
                   ))}
                   {privRecent.length===0 && <tr><td colSpan={4} style={{padding:20, textAlign:'center', color:C.muted}}>Loading…</td></tr>}
@@ -641,7 +666,7 @@ export default function Dashboard() {
             </Panel>
           </div>
 
-          <Panel title="💡 EC vs Private — Avg $/psm by Planning Area (2020–2026)">
+          <Panel title="💡 EC vs Private — Avg $psf ppr by Planning Area (2020–2026)">
             <div style={{padding:'14px 18px'}}>
               {psmRows.map((r,i)=>(
                 <div key={i} style={{display:'flex', alignItems:'center', gap:8,
@@ -656,7 +681,7 @@ export default function Dashboard() {
                           background:C.ecColor, borderRadius:2}}/>
                       </div>
                       <span style={{fontSize:10, fontFamily:'DM Mono,monospace', color:C.muted,
-                        width:95, textAlign:'right', flexShrink:0}}>${Math.round(r.ec).toLocaleString()}</span>
+                        width:95, textAlign:'right', flexShrink:0}}>{fmtPsf(r.ec)}</span>
                     </div>}
                     {r.pr && <div style={{display:'flex', alignItems:'center', gap:6}}>
                       <span style={{fontSize:9, color:C.privColor, width:14, fontWeight:700}}>PR</span>
@@ -665,14 +690,14 @@ export default function Dashboard() {
                           background:C.privColor, borderRadius:2}}/>
                       </div>
                       <span style={{fontSize:10, fontFamily:'DM Mono,monospace', color:C.muted,
-                        width:95, textAlign:'right', flexShrink:0}}>${Math.round(r.pr).toLocaleString()}</span>
+                        width:95, textAlign:'right', flexShrink:0}}>{fmtPsf(r.pr)}</span>
                     </div>}
                   </div>
                 </div>
               ))}
               <div style={{fontSize:10, color:C.muted, marginTop:10, fontFamily:'DM Mono,monospace'}}>
-                <span style={{color:C.ecColor}}>■ EC</span> = $/psm site area &nbsp;|&nbsp;
-                <span style={{color:C.privColor}}>■ PR</span> = $/psm GFA · 2020–2026 sites only
+                <span style={{color:C.ecColor}}>■ EC</span> = $psf ppr &nbsp;|&nbsp;
+                <span style={{color:C.privColor}}>■ PR</span> = $psf ppr · 2020–2026 sites only
               </div>
             </div>
           </Panel>
@@ -688,15 +713,16 @@ export default function Dashboard() {
 
           <Panel title="🟡 Awarded 2024–2026" badge={ecData.filter(d=>d.awardDate>='2024-01-01').length}>
             <table>
-              <thead><tr><Th>Location</Th><Th>Planning Area</Th><Th>Award Date</Th><Th>Developer</Th><Th>Bid</Th><Th>GFA (sqm)</Th><Th>Bids</Th></tr></thead>
+              <thead><tr><Th>Location</Th><Th>Planning Area</Th><Th>Award Date</Th><Th>Developer</Th><Th>Bid</Th><Th>$psf ppr</Th><Th>GFA (sqm)</Th><Th>Bids</Th></tr></thead>
               <tbody>
                 {ecData.filter(d=>d.awardDate>='2024-01-01').map((d,i)=>(
                   <tr key={i} style={{background:'#fffbf0'}}>
-                    <Td bold sx={{fontSize:11}}>{d.location}</Td>
+                    <LocCell name={d.location} project={d.projectName}/>
                     <Td sx={{fontSize:11}}>{d.planningArea}</Td>
                     <Td mono>{d.awardDate}</Td>
                     <Td sx={{fontSize:10, color:C.muted}}>{d.tenderer?.slice(0,45)}</Td>
                     <Td mono>{fmt(d.price)}</Td>
+                    <Td mono green={gfaPsm(d)>15000}>{fmtPsf(gfaPsm(d))}</Td>
                     <Td mono>{d.gfa ? Math.round(d.gfa).toLocaleString() : '—'}</Td>
                     <Td mono>{d.bids || '—'}</Td>
                   </tr>
@@ -707,15 +733,16 @@ export default function Dashboard() {
 
           <Panel title="📋 All EC Sites" badge={ecData.length} meta="Scroll to see all" maxH="450px">
             <table>
-              <thead><tr><Th>Date</Th><Th>Location</Th><Th>Planning Area</Th><Th>Developer</Th><Th>Bid</Th><Th>Bidders</Th></tr></thead>
+              <thead><tr><Th>Date</Th><Th>Location</Th><Th>Planning Area</Th><Th>Developer</Th><Th>Bid</Th><Th>$psf ppr</Th><Th>Bidders</Th></tr></thead>
               <tbody>
                 {ecData.map((d,i)=>(
                   <tr key={i} style={{background:d.awardDate>='2025-01-01'?'#fffbf0':'inherit'}}>
                     <Td mono>{d.awardDate}</Td>
-                    <Td bold sx={{fontSize:11}}>{d.location}</Td>
+                    <LocCell name={d.location} project={d.projectName}/>
                     <Td sx={{fontSize:11}}>{d.planningArea}</Td>
                     <Td sx={{fontSize:10, color:C.muted}}>{d.tenderer?.slice(0,40)}</Td>
                     <Td mono>{fmt(d.price)}</Td>
+                    <Td mono green={gfaPsm(d)>15000}>{fmtPsf(gfaPsm(d))}</Td>
                     <Td mono>{d.bids || '—'}</Td>
                   </tr>
                 ))}
@@ -735,11 +762,11 @@ export default function Dashboard() {
                 ))}
               </div>
             </Panel>
-            <Panel title="🔵 Private Res — Avg $/psm GFA by Area">
+            <Panel title="🔵 Private Res — Avg $psf ppr by Area">
               <div style={{padding:'12px 16px'}}>
                 {privAreaList.slice(0,15).map(t=>(
                   <BarRow key={t.name} label={t.name} value={t.avgPsm} max={maxPrivPsm}
-                    color={C.privColor} suffix={`$${Math.round(t.avgPsm).toLocaleString()}/psm · ${t.count}`}/>
+                    color={C.privColor} suffix={`${fmtPsf(t.avgPsm)} · ${t.count}`}/>
                 ))}
               </div>
             </Panel>
@@ -747,7 +774,7 @@ export default function Dashboard() {
 
           <Panel title="Full Region Comparison — EC vs Private">
             <table>
-              <thead><tr><Th>Planning Area</Th><Th>EC Sites</Th><Th>EC Avg Bid</Th><Th>Priv Sites</Th><Th>Priv Avg Bid</Th><Th>Priv $/psm GFA</Th></tr></thead>
+              <thead><tr><Th>Planning Area</Th><Th>EC Sites</Th><Th>EC Avg Bid</Th><Th>EC $psf ppr</Th><Th>Priv Sites</Th><Th>Priv Avg Bid</Th><Th>Priv $psf ppr</Th></tr></thead>
               <tbody>
                 {[...new Set([...ecAreaList.map(t=>t.name),...privAreaList.map(t=>t.name)])].sort().map(name=>{
                   const ec = ecAreaList.find(t=>t.name===name)
@@ -757,9 +784,10 @@ export default function Dashboard() {
                       <Td bold>{name}</Td>
                       <Td mono dim={!ec}>{ec?ec.count:'—'}</Td>
                       <Td mono dim={!ec}>{ec?fmt(ec.avg):'—'}</Td>
+                      <Td mono dim={!ec} green={ec&&ec.avgPsm>15000}>{ec?fmtPsf(ec.avgPsm):'—'}</Td>
                       <Td mono dim={!pr}>{pr?pr.count:'—'}</Td>
                       <Td mono dim={!pr}>{pr?fmt(pr.avg):'—'}</Td>
-                      <Td mono dim={!pr} green={pr&&pr.avgPsm>15000}>{pr?fmtPsm(pr.avgPsm):'—'}</Td>
+                      <Td mono dim={!pr} green={pr&&pr.avgPsm>15000}>{pr?fmtPsf(pr.avgPsm):'—'}</Td>
                     </tr>
                   )
                 })}
@@ -805,7 +833,7 @@ export default function Dashboard() {
 
           <Panel title="All Residential Land Bids" maxH="600px">
             <table>
-              <thead><tr><Th>Type</Th><Th>Date</Th><Th>Location</Th><Th>Area</Th><Th>Developer</Th><Th>Price</Th><Th>$/psm</Th><Th>Bids</Th></tr></thead>
+              <thead><tr><Th>Type</Th><Th>Date</Th><Th>Location</Th><Th>Area</Th><Th>Developer</Th><Th>Price</Th><Th>$psf ppr</Th><Th>Bids</Th></tr></thead>
               <tbody>
                 {filtered.length===0 && (
                   <tr><td colSpan={8} style={{padding:30, textAlign:'center', color:C.muted}}>No results</td></tr>
@@ -814,11 +842,11 @@ export default function Dashboard() {
                   <tr key={i} style={{background:d.date>='2025-01-01'?'#fffbf0':'inherit'}}>
                     <Td><Badge type={d.type}>{d.type}</Badge></Td>
                     <Td mono>{d.date}</Td>
-                    <Td bold sx={{fontSize:11, maxWidth:180}}>{d.name}</Td>
+                    <LocCell name={d.name} project={d.project} maxWidth={180}/>
                     <Td sx={{fontSize:11}}>{d.area}</Td>
                     <Td sx={{fontSize:10, color:C.muted}}>{d.developer?.slice(0,45)}{d.developer?.length>45?'…':''}</Td>
                     <Td mono red={d.price>1e9}>{fmt(d.price)}</Td>
-                    <Td mono dim={!d.psm}>{d.psm?`$${Math.round(d.psm).toLocaleString()}`:'—'}</Td>
+                    <Td mono dim={!d.psm} green={d.psm>15000}>{fmtPsf(d.psm)}</Td>
                     <Td mono>{d.bids||'—'}</Td>
                   </tr>
                 ))}
