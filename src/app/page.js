@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
+import { lookupProjectName } from '@/lib/projectNames'
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const CACHE_KEY_DATA = 'ura_allsites_v1'
@@ -413,14 +414,18 @@ export default function Dashboard() {
     const merged = [
       ...ec,
       ...FALLBACK_EC.filter(d => !liveEcDates.has(d.awardDate + d.location))
-    ].sort((a, b) => b.awardDate.localeCompare(a.awardDate))
+    ]
+      .map(d => ({ ...d, projectName: d.projectName || lookupProjectName(d.location, d.awardDate) }))
+      .sort((a, b) => b.awardDate.localeCompare(a.awardDate))
 
     // Same for priv
     const livePrivKeys = new Set(priv.map(d => d.awardDate + d.location))
     const mergedPriv = [
       ...priv,
       ...FALLBACK_PRIV.filter(d => !livePrivKeys.has(d.awardDate + d.location))
-    ].sort((a, b) => b.awardDate.localeCompare(a.awardDate))
+    ]
+      .map(d => ({ ...d, projectName: d.projectName || lookupProjectName(d.location, d.awardDate) }))
+      .sort((a, b) => b.awardDate.localeCompare(a.awardDate))
 
     setEcData(merged)
     setPrivData(mergedPriv)
