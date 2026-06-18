@@ -556,12 +556,16 @@ export default function Dashboard() {
       <header style={{background:C.ink, color:'#fff', padding:'16px 28px',
         display:'flex', alignItems:'center', justifyContent:'space-between',
         borderBottom:`3px solid ${C.accent}`, flexWrap:'wrap', gap:12}}>
-        <div>
-          <div style={{fontWeight:800, fontSize:18, letterSpacing:'-0.4px'}}>
-            🏗 SG Residential Land Bids
-          </div>
-          <div style={{fontSize:11, color:C.muted, marginTop:3, fontFamily:'DM Mono,monospace'}}>
-            Live · URA GLS via data.gov.sg · Auto-refreshes every 24h
+        <div style={{display:'flex', alignItems:'center', gap:14}}>
+          <img src="/logo.jpg" alt="LeeYong Division Collective" width={44} height={44}
+            style={{borderRadius:'50%', flexShrink:0}}/>
+          <div>
+            <div style={{fontWeight:800, fontSize:18, letterSpacing:'-0.4px'}}>
+              🏗 SG Residential Land Bids
+            </div>
+            <div style={{fontSize:11, color:C.muted, marginTop:3, fontFamily:'DM Mono,monospace'}}>
+              LeeYong Division Collective · Live · URA GLS via data.gov.sg · Auto-refreshes every 24h
+            </div>
           </div>
         </div>
         <div style={{display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
